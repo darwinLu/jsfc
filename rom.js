@@ -16,7 +16,6 @@ export class Rom{
         // header[7] = 0b11011111
         // header[6] = 0b00011111
         var mapperId = (header[7] & 0xF0 ) | (header[6] >> 4)
-        console.log(mapperId.toString(2))
         //按照mapper值生成mapper
         this.mapper = new Mappers().getMapper(mapperId)
        

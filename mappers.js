@@ -31,9 +31,6 @@ mappers[0] = class Mapper0 {
     // loadCHRRom(){
     //     var chrRom = getRomData(0x10 + this.PRGRomSize,0x10 + this.PRGRomSize + this.CHRRomSize)
     // }
-    mow(){
-        console.log('mapper0 mow')
-    }
     setToMemory(romData){
         this.romData = romData
         this.loadHeader()
@@ -51,7 +48,5 @@ mappers[1] = class Mapper1 extends mappers[0]{
         super()
         this.mapperId = 1
     }
-    mow(){
-        console.log('mapper1 mow')
-    }
+
 }

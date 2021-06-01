@@ -39,16 +39,13 @@ export class CPU{
 
     reset(){
         console.log('CPU reset')
-        console.log(this.memory.load(this.RESET[1]).toString(16))
-        console.log(this.memory.load(this.RESET[0]).toString(16))
         let resetAddress = (this.memory.load(this.RESET[1]) << 8) + this.memory.load(this.RESET[0])
         this.PC = resetAddress
-        console.log(this.memory.load(resetAddress).toString(16))
+        this.PC = 0xC000
     }
 
     execute(){
         let startTime = new Date().getMilliseconds()
-        console.log('start time :'+startTime)
         if(this.leftInstructionLoop == 0){
             // 取指令
             let instructionCode = this.memory.load(this.PC)
@@ -69,6 +66,7 @@ export class CPU{
             // 传入当前指令的地址是为了判断要读取的新地址是否跨页了
             this.doInstructionAction(instructionType,addressDest,addressMode,currentInstructionAddress)
             this.leftInstructionLoop += instructionCycle
+            this.showDebug(currentInstructionAddress)
         }
         this.leftInstructionLoop--  
     }
@@ -124,7 +122,7 @@ export class CPU{
             // 返回的值是PC增减后的值，需要在执行指令时根据状态寄存器的标志位，来决定是否要用这个值来修改PC，进行跳转
             case this.addressModeEnum.Relative:
                 temp = this.memory.load(currentInstructionAddress + 1)
-                if(opNumber < 0x80){
+                if(temp < 0x80){
                     addressDest = currentInstructionAddress + temp
                 }
                 else{
@@ -496,14 +494,15 @@ export class CPU{
     
             case this.instructionTypeEnum.INS_JMP:
                 console.log('JMP')
-                this.PC = this.addressDest
+                this.PC = addressDest
+                console.log('after JMP',this.PC.toString(16))
                 break
                 
             case this.instructionTypeEnum.INS_JSR:
                 console.log('JSR')
                 this.push((this.PC -1) >> 8 & 0xFF)
                 this.push((this.PC - 1) & 0xff)
-                this.PC = this.addressDest
+                this.PC = addressDest
                 break
 
             case this.instructionTypeEnum.INS_LDA:
@@ -753,7 +752,6 @@ export class CPU{
             case this.instructionTypeEnum.INS_TXS:
                 console.log('TXS')
                 this.REG_SP = this.REG_X
-                this.emulateEnd = 1
                 break
 
             case this.instructionTypeEnum.INS_TXS:
@@ -765,12 +763,13 @@ export class CPU{
 
             default:
                 console.log('undefined instruction')
+                this.emulateEnd = 1
         }
     }
 
     changePC(){
         // 修改PC指向的地址值，增加指令长度值（1Byte指令长度+操作数长度），指向下一条指令
-        this.PC += this.operationNumberLength + 1
+        this.PC += (this.operationNumberLength + 1)
     }
 
     // 初始化指令表
@@ -1331,10 +1330,24 @@ export class CPU{
         
     }
 
-    showDebug(){
-        console.log('REG_A: '+this.REG_A)
-        console.log('REG_X: '+this.REG_X)
-        console.log('REG_Y: '+this.REG_Y)
-        console.log('PS_OVERFLOW: '+this.PS_OVERFLOW)
+    showDebug(currentInstructionAddress){
+        console.log('PC: $'+ this.toFormattedHex(currentInstructionAddress,4) +' '
+            + 'INS Code:' + this.toFormattedHex(this.memory.load(currentInstructionAddress),2) + ' '
+            + 'REG_A: '+ this.REG_A
+        )
+        // console.log('REG_A: '+this.REG_A)
+        // console.log('REG_X: '+this.REG_X)
+        // console.log('REG_Y: '+this.REG_Y)
+        // console.log('PS_OVERFLOW: '+this.PS_OVERFLOW)
+    }
+    
+    toFormattedHex(num,length){
+        var len = num.toString(16).length;
+        var outStr = num.toString(16).toUpperCase()
+        while(len < length) {
+            outStr = '0' + outStr
+            len++;
+        }
+        return outStr
     }
 }

@@ -10,11 +10,8 @@ export class FC{
     }
     
     reset(nesData){
-        console.log('fc reset')
         //从nes文件读取到rom
         var romData = nesData
-        // console.log(romData)
-
         //从rom获取mapper编号
         //将rom信息按照mapper规则映射到内存
         this.rom.loadRom(romData)
@@ -29,7 +26,6 @@ export class FC{
 
     onFrame(){
         for(;;){
-            console.log('fc onFrame')
             this.cpu.execute()
             if(this.cpu.emulateEnd == 1){
                 break
