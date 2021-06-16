@@ -1,4 +1,5 @@
 import {Memory} from './memory.js'
+import {PPUMemory} from './ppu-memory.js'
 
 var mappers = []
 
@@ -16,6 +17,7 @@ mappers[0] = class Mapper0 {
         this.PRGRomSize = 0;
         this.CHRRomSize = 0;
         this.memory = Memory.getInstance()
+        this.ppuMemory = PPUMemory.getInstance()
     }
     loadHeader(){
         var header = this.getRomData(0x00,0x10)
@@ -28,14 +30,16 @@ mappers[0] = class Mapper0 {
         this.memory.writeToMemory(prgRom,0x8000)
         this.memory.writeToMemory(prgRom,0xC000)
     }
-    // loadCHRRom(){
-    //     var chrRom = getRomData(0x10 + this.PRGRomSize,0x10 + this.PRGRomSize + this.CHRRomSize)
-    // }
+    //将图样表映射到PPU可寻址内存的0x0000——0x1FFF
+    loadCHRRom(){
+        var chrRom = this.getRomData(0x10 + this.PRGRomSize,0x10 + this.PRGRomSize + this.CHRRomSize)
+        this.ppuMemory.writeToMemory(chrRom,0x0000)
+    }
     setToMemory(romData){
         this.romData = romData
         this.loadHeader()
         this.loadPRGRom()
-        // this.loadCHRRom()
+        this.loadCHRRom()
     }
     getRomData(startAddress,endAddress){
         return this.romData.subarray(startAddress,endAddress)

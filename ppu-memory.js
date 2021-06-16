@@ -1,15 +1,17 @@
-//CPU可寻址内存（64KB）
-//CPU能寻址的所有地址空间，包括卡带上的空间
-
-export class Memory{
+// PPU可寻址内存
+export class PPUMemory{
     constructor(){
         this.instance = null 
-        this.mem = new Array(0xFFFF)
+        this.mem = new Array(0x3FFF)
+        // 初始化PPU寻址内存为全FF
+        for(let i = 0;i<0x3FFF;i++){
+            this.mem[i] = 0xFF
+        }
     }
 
     static getInstance(){
         if(!this.instance){
-            this.instance = new Memory()
+            this.instance = new PPUMemory()
             return this.instance
         }
         else{

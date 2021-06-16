@@ -1,4 +1,5 @@
 import {Memory} from './memory.js'
+import fs from 'fs'
 
 export class CPU{
     constructor(){
@@ -10,7 +11,7 @@ export class CPU{
         // SP寄存器(Stack Pointer)
         // PS寄存器(Processor Status)
         this.PC = new Number(0x00FF)
-        this.SP = new Number(0xFF)
+        this.SP = new Number(0xFD)
         this.PS = new Number(0x00)
         // PS寄存器中的标志位
         this.PS_CARRY = 0
@@ -21,6 +22,11 @@ export class CPU{
         this.PS_NOTUSED = 1
         this.PS_OVERFLOW = 0
         this.PS_NEGATIVE = 0
+        // 中断检查位
+        this.INTERRUPT_IRQ = 0
+        this.INTERRUPT_BRK = 0
+        this.INTERRUPT_NMI = 0
+        this.INTERRUPT_RESET = 0
         // 执行指令剩余时钟周期
         this.leftInstructionLoop = 0
         // 寻址跨页时需要增加的时钟周期数
@@ -42,13 +48,19 @@ export class CPU{
         let resetAddress = (this.memory.load(this.RESET[1]) << 8) + this.memory.load(this.RESET[0])
         this.PC = resetAddress
         this.PC = 0xC000
+        fs.unlink("nestest-my.log", err => {
+            if (!err) console.log("删除成功");
+        });
     }
 
     execute(){
         let startTime = new Date().getMilliseconds()
         if(this.leftInstructionLoop == 0){
+            // 检查是否有中断
+            this.checkInterrupt()
             // 取指令
             let instructionCode = this.memory.load(this.PC)
+            console.log(instructionCode.toString(16))
             // 指令译码
             // 查表获得指令的类型，时钟周期数，寻址类型
             let instructionType = this.getInstructionType(instructionCode)
@@ -62,13 +74,18 @@ export class CPU{
             let addressDest = this.findAddress(addressMode,currentInstructionAddress)
             // 增加PC值，指向下一条指令
             this.changePC()
+            console.log(addressMode)
+            this.showDebug(currentInstructionAddress)
             // 将需要处理的数据传给指令，判断指令的大类后处理数据，参数传递addressMode为累加器寻址使用，因为累加器没有地址，所以需要通过寻址方式来判断
             // 传入当前指令的地址是为了判断要读取的新地址是否跨页了
             this.doInstructionAction(instructionType,addressDest,addressMode,currentInstructionAddress)
             this.leftInstructionLoop += instructionCycle
-            this.showDebug(currentInstructionAddress)
         }
         this.leftInstructionLoop--  
+    }
+
+    checkInterrupt(){
+
     }
 
     getInstructionType(instructionCode){
@@ -123,11 +140,13 @@ export class CPU{
             case this.addressModeEnum.Relative:
                 temp = this.memory.load(currentInstructionAddress + 1)
                 if(temp < 0x80){
-                    addressDest = currentInstructionAddress + temp
+                    // 当前指令地址+1是操作数地址，+2是下一条指令地址，要在下一条指令地址上进行加减
+                    addressDest = currentInstructionAddress + 2 + temp
                 }
                 else{
-                    addressDest = currentInstructionAddress - temp
+                    addressDest = currentInstructionAddress + 2 - temp
                 }
+                this.operationNumberLength = 1
                 break
             // Absolute 绝对寻址，直接使用指令后面跟的2Byte操作数
             case this.addressModeEnum.Absolute:
@@ -154,22 +173,58 @@ export class CPU{
                 this.operationNumberLength = 2
                 break
             // Indirect 间接寻址，JMP指令用，跳转到指令后面2Byte数据组成的地址上的值代表的地址处
+            // Ox02FF 的bug
             case this.addressModeEnum.Indirect:
-                addressDest = this.memory.load(this.memory.load(currentInstructionAddress + 1) | (this.memory.load(currentInstructionAddress + 2) << 8))
+                // 取第一个操作数 应该是 FF
+                let indexLoByte = this.memory.load(currentInstructionAddress + 1)
+                // 取第二个操作数 应该是 02
+                let indexHiByte = this.memory.load(currentInstructionAddress + 2) << 8
+                // 组合2个操作数为一个间接地址 应该是02FF
+                let indexTempAddress = indexLoByte | indexHiByte
+                // 实际地址是要取indexTempAddress处开始2Byte的值组成新地址
+                // 取实际跳转地址的低位 应该是 02FF处的值
+                let realAddressLo = this.memory.load(indexTempAddress)
+                // 取实际跳转地址的高位 如果bug 应该是0200处的值
+                let realAddressHi
+                if(indexLoByte == 0xFF){
+                    realAddressHi = this.memory.load(indexTempAddress & 0xFF00)
+                }
+                else{
+                    realAddressHi = this.memory.load(indexTempAddress + 1)
+                }
+                addressDest = realAddressLo | realAddressHi << 8
+                console.log('JMP '+ 'loByte:'+indexLoByte +';hiByte:'+indexHiByte)
+                console.log(addressDest.toString(16))
                 this.operationNumberLength = 2
                 break
             // IndexedIndirect 变址间接寻址X
             case this.addressModeEnum.IndexedIndirectX:
-                temp = this.memory.load(currentInstructionAddress + 1) + this.REG_X
-                addressDest = this.memory.load(temp) | (this.memory.load(temp + 1) << 8)
+                // 获取操作数指定的内存位置的值后，和寄存器X相加，然后需要&00FF，防止溢出ZeroPage
+                temp = (this.memory.load(currentInstructionAddress + 1) + this.REG_X) & 0x00FF
+                console.log('in index')
+                console.log(this.memory.load(currentInstructionAddress + 1))
+                console.log(this.REG_X)
+                console.log('temp:'+ temp.toString(16))
+                console.log('lo bit:'+this.memory.load(temp).toString(16))
+                console.log('hi bit:'+this.memory.load((temp + 1) & 0x00FF).toString(16))
+                let temp1 =  (this.memory.load(temp + 1) << 8)
+                console.log('temp1 '+ temp1.toString(2))
+                addressDest = (this.memory.load(temp) | (this.memory.load((temp + 1) & 0x00FF) << 8))
+                console.log('addressDest:'+addressDest.toString(16))
                 this.operationNumberLength = 1
                 break
             // IndirectIndexed 间接变址寻址Y
             case this.addressModeEnum.IndirectIndexedY:
-                temp = this.memory.load(currentInstructionAddress + 1) & 0x00FF
-                addressDest = (this.memory.load(temp) | (this.memory.load(temp + 1) << 8)) + this.REG_Y
-                if(((this.memory.load(temp) | (this.memory.load(temp + 1) << 8)) & 0xFF00) != 
-                (addressDest & 0xFF00)){
+                // 获取操作数，写入到indexYOpNum
+                let indexYOpNum = this.memory.load(currentInstructionAddress + 1)
+                let indexYLoByte = this.memory.load(indexYOpNum)
+                let indexYHiByte = this.memory.load((indexYOpNum + 1) & 0x00FF) << 8
+                console.log('index y')
+                console.log('opNum:'+indexYOpNum.toString(16))
+                console.log('LoByte:'+indexYLoByte.toString(16))
+                console.log('HiByte:'+indexYHiByte.toString(16))
+                addressDest = (indexYLoByte | indexYHiByte) + this.REG_Y
+                if(((indexYLoByte | indexYHiByte) & 0xFF00) != (addressDest & 0xFF00)){
                     this.cycleToAdd = 1
                 }
                 this.operationNumberLength = 1
@@ -187,7 +242,7 @@ export class CPU{
         switch(instructionType){
             case this.instructionTypeEnum.INS_ADC:
                 console.log('ADC')
-                temp = this.REG_A + this.memory.load(addressDest) + this.PS_CARRY
+                temp = (this.REG_A + this.memory.load(addressDest) + this.PS_CARRY)
                 // 将操作数看做有符号数，如果相加前两个数符号相同，而结果用补码表示后，与之前操作数符号不同，则认为该结果溢出
                 // 即127 + 1 = 128（补码表示-1）溢出，或者-128+(-1)=-129（补码表示+127）溢出
                 if((this.REG_A >> 7 ^ this.memory.load(addressDest) >> 7) == 0 && 
@@ -199,9 +254,11 @@ export class CPU{
                     this.PS_OVERFLOW = 0
                 }
                 this.PS_CARRY = temp > 0xFF ? 1 : 0
-                this.PS_NEGATIVE = temp >> 7 
-                this.PS_ZERO = temp == 0 ? 1 : 0
-                this.REG_A = temp
+                // 取标志位应该&1，防止溢出后取出了溢出位
+                this.PS_NEGATIVE = temp >> 7 & 1
+                // Zero标志位应该比较溢出截断后的数字
+                this.PS_ZERO = (temp & 0xFF) == 0 ? 1 : 0
+                this.REG_A = temp & 0xFF
                 this.leftInstructionLoop += this.cycleToAdd
                 break
 
@@ -209,7 +266,7 @@ export class CPU{
                 console.log('AND')
                 temp = this.REG_A & this.memory.load(addressDest)
                 this.PS_NEGATIVE = temp >> 7 
-                this.PS_ZERO = temp == 0 ? 1 : 0
+                this.PS_ZERO = (temp == 0 ? 1 : 0)
                 this.REG_A = temp
                 this.leftInstructionLoop += this.cycleToAdd
                 break
@@ -277,8 +334,11 @@ export class CPU{
                 if((temp & this.REG_A) == 0){
                     this.PS_ZERO = 1
                 }
-                this.PS_OVERFLOW = temp >> 6
-                this.PS_NEGATIVE = temp >> 7
+                else{
+                    this.PS_ZERO = 0
+                }
+                this.PS_OVERFLOW = temp >> 6 & 1
+                this.PS_NEGATIVE = temp >> 7 & 1
                 break
             
             case this.instructionTypeEnum.INS_BMI:
@@ -377,8 +437,14 @@ export class CPU{
                 if(temp == 0){
                     this.PS_ZERO = 1
                 }
-                if(temp >> 7 == 1){
+                else{
+                    this.PS_ZERO = 0
+                }
+                if((temp >> 7) & 1 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 this.leftInstructionLoop += this.cycleToAdd
                 break
@@ -390,8 +456,14 @@ export class CPU{
                 if(temp == 0){
                     this.PS_ZERO = 1
                 }
-                if(temp >> 7 == 1){
+                else{
+                    this.PS_ZERO = 0
+                }
+                if((temp >> 7) & 1 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 break
 
@@ -402,19 +474,31 @@ export class CPU{
                 if(temp == 0){
                     this.PS_ZERO = 1
                 }
-                if(temp >> 7 == 1){
+                else{
+                    this.PS_ZERO = 0
+                }
+                if((temp >> 7) & 1 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 break
 
             case this.instructionTypeEnum.INS_DEC:
                 console.log('DEC')
-                temp = this.memory.load(addressDest) - 1
+                temp = (this.memory.load(addressDest) - 1) & 0xFF
                 if(temp == 0){
                     this.PS_ZERO = 1
                 }
+                else{
+                    this.PS_ZERO = 0
+                }
                 if(temp >> 7 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 this.memory.write(addressDest,temp)
                 break
@@ -422,25 +506,37 @@ export class CPU{
             case this.instructionTypeEnum.INS_DEX:
                 console.log('DEX')
                 temp = this.REG_X - 1
-                if(temp == 0){
+                if((temp & 0xFF) == 0){
                     this.PS_ZERO = 1
                 }
-                if(temp >> 7 == 1){
+                else{
+                    this.PS_ZERO = 0
+                }
+                if((temp & 0xFF)  >> 7 == 1){
                     this.PS_NEGATIVE = 1
                 }
-                this.REG_X = temp
+                else{
+                    this.PS_NEGATIVE = 0
+                }
+                this.REG_X = temp & 0xFF
                 break
 
             case this.instructionTypeEnum.INS_DEY:
                 console.log('DEY')
-                temp = this.memory.load(addressDest) - 1
-                if(temp == 0){
+                temp = this.REG_Y - 1
+                if((temp & 0xFF) == 0){
                     this.PS_ZERO = 1
                 }
-                if(temp >> 7 == 1){
+                else{
+                    this.PS_ZERO = 0
+                }
+                if((temp & 0xFF) >> 7 == 1){
                     this.PS_NEGATIVE = 1
                 }
-                this.REG_Y = temp
+                else{
+                    this.PS_NEGATIVE = 0
+                }
+                this.REG_Y = temp & 0xFF
                 break
 
             case this.instructionTypeEnum.INS_EOR:
@@ -449,8 +545,14 @@ export class CPU{
                 if(temp == 0){
                     this.PS_ZERO = 1
                 }
+                else{
+                    this.PS_ZERO = 0
+                }
                 if(temp >> 7 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 this.REG_A = temp
                 this.leftInstructionLoop += this.cycleToAdd
@@ -458,12 +560,18 @@ export class CPU{
 
             case this.instructionTypeEnum.INS_INC:
                 console.log('INC')
-                temp = this.memory.load(addressDest) + 1
+                temp = (this.memory.load(addressDest) + 1) & 0xFF
                 if(temp == 0){
                     this.PS_ZERO = 1
                 }
+                else{
+                    this.PS_ZERO = 0
+                }
                 if(temp >> 7 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 this.memory.write(addressDest,temp)
                 break
@@ -471,60 +579,95 @@ export class CPU{
             case this.instructionTypeEnum.INS_INX:
                 console.log('INX')
                 temp = this.REG_X + 1
-                if(temp == 0){
+                if((temp & 0xFF)  == 0){
                     this.PS_ZERO = 1
                 }
-                if(temp >> 7 == 1){
+                else{
+                    this.PS_ZERO = 0
+                }
+                if((temp & 0xFF)  >> 7 == 1){
                     this.PS_NEGATIVE = 1
                 }
-                this.REG_X = temp
+                else{
+                    this.PS_NEGATIVE = 0
+                }
+                this.REG_X = temp & 0xFF
                 break
 
             case this.instructionTypeEnum.INS_INY:
                 console.log('INY')
                 temp = this.REG_Y + 1
-                if(temp == 0){
+                if((temp & 0xFF) == 0){
                     this.PS_ZERO = 1
                 }
-                if(temp >> 7 == 1){
+                else{
+                    this.PS_ZERO = 0
+                }
+                if((temp & 0xFF) >> 7 == 1){
                     this.PS_NEGATIVE = 1
                 }
-                this.REG_Y = temp
+                else{
+                    this.PS_NEGATIVE = 0
+                }
+                this.REG_Y = temp & 0xFF
                 break
     
             case this.instructionTypeEnum.INS_JMP:
                 console.log('JMP')
+                console.log('JMP Dest:'+addressDest.toString(16))
                 this.PC = addressDest
-                console.log('after JMP',this.PC.toString(16))
                 break
                 
             case this.instructionTypeEnum.INS_JSR:
                 console.log('JSR')
-                this.push((this.PC -1) >> 8 & 0xFF)
-                this.push((this.PC - 1) & 0xff)
+                this.push((this.PC - 1) >> 8 & 0xFF)
+                this.push((this.PC - 1) & 0xFF)
+                // console.log(((this.PC - 1) >> 8 & 0xFF).toString(16))
+                // console.log(((this.PC - 1) & 0xFF).toString(16))
                 this.PC = addressDest
                 break
 
             case this.instructionTypeEnum.INS_LDA:
                 console.log('LDA')
-                this.REG_A = this.memory.load(addressDest)
+                console.log('after LDA')
+                console.log(addressDest.toString(16))
+                console.log(this.memory.load(addressDest).toString(16))
+                this.REG_A = this.memory.load(addressDest) & 0xFF
+                // console.log(addressDest.toString(16))
+                // console.log(this.REG_A.toString(16))
                 if(this.REG_A == 0){
                     this.PS_ZERO = 1
                 }
+                else{
+                    this.PS_ZERO = 0
+                }
                 if(this.REG_A >> 7 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 this.leftInstructionLoop += this.cycleToAdd
                 break
 
             case this.instructionTypeEnum.INS_LDX:
                 console.log('LDX')
+                console.log(addressDest)
+                console.log(this.memory.load(addressDest))
+                
                 this.REG_X = this.memory.load(addressDest)
+                // console.log(this.REG_X.toString(16))
                 if(this.REG_X == 0){
                     this.PS_ZERO = 1
                 }
+                else{
+                    this.PS_ZERO = 0
+                }
                 if(this.REG_X >> 7 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 this.leftInstructionLoop += this.cycleToAdd
                 break
@@ -535,8 +678,14 @@ export class CPU{
                 if(this.REG_Y == 0){
                     this.PS_ZERO = 1
                 }
+                else{
+                    this.PS_ZERO = 0
+                }
                 if(this.REG_Y >> 7 == 1){
                     this.PS_NEGATIVE = 1
+                }
+                else{
+                    this.PS_NEGATIVE = 0
                 }
                 this.leftInstructionLoop += this.cycleToAdd
                 break
@@ -584,7 +733,7 @@ export class CPU{
                         (this.PS_ZERO << 1) |
                         (this.PS_INTERRUPT << 2) |
                         (this.PS_DECIMAL << 3) |
-                        (this.PS_BREAK << 4) |
+                        (1 << 4) |
                         (this.PS_NOTUSED << 5) |
                         (this.PS_OVERFLOW << 6) |
                         (this.PS_NEGATIVE << 7)
@@ -597,7 +746,10 @@ export class CPU{
                 if(this.REG_A == 0){
                     this.PS_ZERO = 1
                 }
-                this.PS_NEGATIVE = (this.REG_ACC >> 7) & 1
+                else{
+                    this.PS_ZERO = 0
+                }
+                this.PS_NEGATIVE = (this.REG_A >> 7) & 1
                 break 
 
             case this.instructionTypeEnum.INS_PLP:
@@ -615,36 +767,42 @@ export class CPU{
         
             case this.instructionTypeEnum.INS_ROL:
                 console.log('ROL')
+                let rolNewCarry
                 if(addressMode == this.addressModeEnum.Accumulator){
-                    this.PS_CARRY = (this.REG_A >> 7) & 1 
-                    this.REG_A = (this.REG_A << 1) & 0xFF
-                    this.PS_NEGATIVE = this.REG_A >> 7 
-                    this.PS_ZERO = this.REG_A == 0 ? 1 : 0
+                    rolNewCarry = (this.REG_A >> 7) & 1
+                    this.REG_A = (this.REG_A << 1 | this.PS_CARRY) & 0xFF
+                    this.PS_CARRY = rolNewCarry
+                    this.PS_NEGATIVE = (this.REG_A & 0xFF) >> 7 
+                    this.PS_ZERO = (this.REG_A & 0xFF) == 0 ? 1 : 0
                 }
                 else{
                     temp = this.memory.load(addressDest);
-                    this.PS_CARRY = (temp >> 7) & 1 
-                    temp = (temp << 1) & 0xFF
-                    this.PS_NEGATIVE = temp >> 7 
-                    this.PS_ZERO = temp == 0 ? 1 : 0
+                    rolNewCarry = (temp >> 7) & 1
+                    temp = (temp << 1 | this.PS_CARRY) & 0xFF
+                    this.PS_CARRY = rolNewCarry
+                    this.PS_NEGATIVE = (temp & 0xFF) >> 7 
+                    this.PS_ZERO = (temp & 0xFF) == 0 ? 1 : 0
                     this.memory.write(addressDest,temp)
                 }
                 break
 
             case this.instructionTypeEnum.INS_ROR:
                 console.log('ROR')
+                let rorNewCarry
                 if(addressMode == this.addressModeEnum.Accumulator){
-                    this.PS_CARRY = this.REG_A & 1 
-                    this.REG_A = (this.REG_A >> 1) & 0xFF
-                    this.PS_NEGATIVE = this.REG_A >> 7 
-                    this.PS_ZERO = this.REG_A == 0 ? 1 : 0
+                    rorNewCarry = this.REG_A & 1
+                    this.REG_A = (this.REG_A >> 1 | this.PS_CARRY << 7 ) & 0xFF
+                    this.PS_CARRY = rorNewCarry
+                    this.PS_NEGATIVE = (this.REG_A & 0xFF) >> 7 
+                    this.PS_ZERO = (this.REG_A & 0xFF) == 0 ? 1 : 0
                 }
                 else{
-                    temp = this.memory.load(addressDest);
-                    this.PS_CARRY = temp & 1 
-                    temp = (temp >> 1) & 0xFF
-                    this.PS_NEGATIVE = temp >> 7 
-                    this.PS_ZERO = temp == 0 ? 1 : 0
+                    temp = this.memory.load(addressDest)
+                    rorNewCarry = temp & 1
+                    temp = (temp >> 1 | this.PS_CARRY << 7) & 0xFF
+                    this.PS_CARRY = rorNewCarry
+                    this.PS_NEGATIVE = (temp & 0xFF) >> 7 
+                    this.PS_ZERO = (temp & 0xFF) == 0 ? 1 : 0
                     this.memory.write(addressDest,temp)
                 }
                 break
@@ -656,17 +814,26 @@ export class CPU{
                 this.PS_ZERO = (temp >> 1) & 1;
                 this.PS_INTERRUPT = (temp >> 2) & 1;
                 this.PS_DECIMAL = (temp >> 3) & 1;
-                this.PS_BREAK = (temp >> 4) & 1;
-                this.F_NOTUSED = (temp >> 5) & 1;
+                // this.PS_BREAK = (temp >> 4) & 1;
+                // this.F_NOTUSED = (temp >> 5) & 1;
                 this.PS_OVERFLOW = (temp >> 6) & 1;
                 this.PS_NEGATIVE = (temp >> 7) & 1;
+                // RTI弹出标志位后还需要弹出PC地址
+                temp = this.pop()
+                // console.log(temp)
+                temp = (temp | (this.pop() << 8)) & 0xFFFF
+                // console.log(temp)
+                this.PC = temp
                 break    
         
             case this.instructionTypeEnum.INS_RTS:
                 console.log('RTS')
                 temp = this.pop()
-                temp = temp + this.pop() << 8
-                this.PC = temp
+                // console.log(temp)
+                temp = (temp | (this.pop() << 8)) & 0xFFFF
+                // console.log(temp)
+                // RTS弹出的地址少了1
+                this.PC = temp + 1
                 break    
 
             case this.instructionTypeEnum.INS_SBC:
@@ -683,10 +850,10 @@ export class CPU{
                     this.PS_OVERFLOW = 0
                 }
                 // js中两数按照有符号数相减，此种情况下，如果要判断减法溢出，可以判断结果是负数
-                this.PS_CARRY = temp < 0 ? 1 : 0
-                this.PS_NEGATIVE = temp >> 7 
-                this.PS_ZERO = temp == 0 ? 1 : 0
-                this.REG_A = temp
+                this.PS_CARRY = temp < 0 ? 0 : 1
+                this.PS_NEGATIVE = (temp & 0xFF) >> 7 
+                this.PS_ZERO = (temp & 0xFF) == 0 ? 1 : 0
+                this.REG_A = temp & 0xFF
                 this.leftInstructionLoop += this.cycleToAdd
                 break 
 
@@ -724,40 +891,40 @@ export class CPU{
             case this.instructionTypeEnum.INS_TAX:
                 console.log('TAX')
                 this.REG_X = this.REG_A
-                this.PS_ZERO = this.REG_X == 0 ? 0 : 1
+                this.PS_ZERO = this.REG_X == 0 ? 1 : 0
                 this.PS_NEGATIVE = (this.REG_X >> 7) & 1
                 break 
 
             case this.instructionTypeEnum.INS_TAY:
                 console.log('TAY')
                 this.REG_Y = this.REG_A
-                this.PS_ZERO = this.REG_Y == 0 ? 0 : 1
+                this.PS_ZERO = this.REG_Y == 0 ? 1 : 0
                 this.PS_NEGATIVE = (this.REG_Y >> 7) & 1
                 break  
 
             case this.instructionTypeEnum.INS_TSX:
-                console.log('TSX')
-                this.REG_X = this.REG_SP
-                this.PS_ZERO = this.REG_X == 0 ? 0 : 1
+                this.REG_X = this.SP
+                this.PS_ZERO = (this.REG_X == 0) ? 1 : 0
                 this.PS_NEGATIVE = (this.REG_X >> 7) & 1
                 break 
 
             case this.instructionTypeEnum.INS_TXA:
                 console.log('TXA')
-                this.REG_A = this.REG_SP
-                this.PS_ZERO = this.REG_A == 0 ? 0 : 1
+                this.REG_A = this.REG_X
+                this.PS_ZERO = this.REG_A == 0 ? 1 : 0
                 this.PS_NEGATIVE = (this.REG_A >> 7) & 1
                 break 
 
             case this.instructionTypeEnum.INS_TXS:
                 console.log('TXS')
-                this.REG_SP = this.REG_X
+                // 低级问题，写的REG_SP，但已经没有了，应该是this.SP
+                this.SP = this.REG_X
                 break
 
-            case this.instructionTypeEnum.INS_TXS:
+            case this.instructionTypeEnum.INS_TYA:
                 console.log('TYA')
                 this.REG_A = this.REG_Y
-                this.PS_ZERO = this.REG_A == 0 ? 0 : 1
+                this.PS_ZERO = this.REG_A == 0 ? 1 : 0
                 this.PS_NEGATIVE = (this.REG_A >> 7) & 1
                 break
 
@@ -891,7 +1058,7 @@ export class CPU{
         this.instructionAddressModeTable = new Array(0xFF)
         // ADC
         this.instructionTypeTable[0x69] = this.instructionTypeEnum.INS_ADC
-        this.instructionAddressModeTable[0x69] = this.addressModeEnum.Implicit
+        this.instructionAddressModeTable[0x69] = this.addressModeEnum.Immediate
         this.instructionTypeTable[0x65] = this.instructionTypeEnum.INS_ADC
         this.instructionAddressModeTable[0x65] = this.addressModeEnum.ZeroPage
         this.instructionTypeTable[0x75] = this.instructionTypeEnum.INS_ADC
@@ -909,7 +1076,7 @@ export class CPU{
 
         // AND
         this.instructionTypeTable[0x29] = this.instructionTypeEnum.INS_AND
-        this.instructionAddressModeTable[0x29] = this.addressModeEnum.Implicit
+        this.instructionAddressModeTable[0x29] = this.addressModeEnum.Immediate
         this.instructionTypeTable[0x25] = this.instructionTypeEnum.INS_AND
         this.instructionAddressModeTable[0x25] = this.addressModeEnum.ZeroPage
         this.instructionTypeTable[0x35] = this.instructionTypeEnum.INS_AND
@@ -1117,11 +1284,11 @@ export class CPU{
         this.instructionTypeTable[0xA6] = this.instructionTypeEnum.INS_LDX
         this.instructionAddressModeTable[0xA6] = this.addressModeEnum.ZeroPage
         this.instructionTypeTable[0xB6] = this.instructionTypeEnum.INS_LDX
-        this.instructionAddressModeTable[0xB6] = this.addressModeEnum.ZeroPageX
+        this.instructionAddressModeTable[0xB6] = this.addressModeEnum.ZeroPageY
         this.instructionTypeTable[0xAE] = this.instructionTypeEnum.INS_LDX
         this.instructionAddressModeTable[0xAE] = this.addressModeEnum.Absolute
         this.instructionTypeTable[0xBE] = this.instructionTypeEnum.INS_LDX
-        this.instructionAddressModeTable[0xBE] = this.addressModeEnum.AbsoluteX
+        this.instructionAddressModeTable[0xBE] = this.addressModeEnum.AbsoluteY
 
         // LDY
         this.instructionTypeTable[0xA0] = this.instructionTypeEnum.INS_LDY
@@ -1153,7 +1320,7 @@ export class CPU{
 
         // ORA
         this.instructionTypeTable[0x09] = this.instructionTypeEnum.INS_ORA
-        this.instructionAddressModeTable[0x09] = this.addressModeEnum.Implicit
+        this.instructionAddressModeTable[0x09] = this.addressModeEnum.Immediate
         this.instructionTypeTable[0x05] = this.instructionTypeEnum.INS_ORA
         this.instructionAddressModeTable[0x05] = this.addressModeEnum.ZeroPage
         this.instructionTypeTable[0x15] = this.instructionTypeEnum.INS_ORA
@@ -1219,7 +1386,7 @@ export class CPU{
 
         // SBC
         this.instructionTypeTable[0xE9] = this.instructionTypeEnum.INS_SBC
-        this.instructionAddressModeTable[0xE9] = this.addressModeEnum.Implicit
+        this.instructionAddressModeTable[0xE9] = this.addressModeEnum.Immediate
         this.instructionTypeTable[0xE5] = this.instructionTypeEnum.INS_SBC
         this.instructionAddressModeTable[0xE5] = this.addressModeEnum.ZeroPage
         this.instructionTypeTable[0xF5] = this.instructionTypeEnum.INS_SBC
@@ -1307,16 +1474,18 @@ export class CPU{
     // 入栈
     push(data){
         // 栈指针SP是8位的，代表内存中的0x0100——0x01FF 
-        let stackPointerAddress = this.REG_SP | 0x0100
+        let stackPointerAddress = this.SP | 0x0100
         this.memory.write(stackPointerAddress,data)
-        this.REG_SP--
+        this.SP--
     }
 
     // 出栈
+    // 出栈时应该先增加指针，然后弹出栈指针所指位置的数据
     pop(){
-        let stackPointerAddress = this.REG_SP | 0x0100
+        this.SP++
+        let stackPointerAddress = this.SP | 0x0100
+        // console.log(stackPointerAddress.toString(16))
         let data = this.memory.load(stackPointerAddress)
-        this.REG_SP++
         return data
     }
 
@@ -1331,23 +1500,78 @@ export class CPU{
     }
 
     showDebug(currentInstructionAddress){
-        console.log('PC: $'+ this.toFormattedHex(currentInstructionAddress,4) +' '
-            + 'INS Code:' + this.toFormattedHex(this.memory.load(currentInstructionAddress),2) + ' '
-            + 'REG_A: '+ this.REG_A
+        let code = this.toFormattedHex(this.memory.load(currentInstructionAddress),2)
+        let codeLength = this.operationNumberLength
+        for(let i = 0;i < codeLength; i++){
+            code += ' ' + this.toFormattedHex(this.memory.load(currentInstructionAddress + i + 1),2)
+        }
+        // if(code == 'BE 00 06'){
+        //     this.emulateEnd = 1
+        //     return
+        // }
+        let ProcessorStatus = this.PS_CARRY |
+        (this.PS_ZERO << 1) |
+        (this.PS_INTERRUPT << 2) |
+        (this.PS_DECIMAL << 3) |
+        (this.PS_BREAK << 4) |
+        (this.PS_NOTUSED << 5) |
+        (this.PS_OVERFLOW << 6) |
+        (this.PS_NEGATIVE << 7)
+        console.log('code '+code+';codeLength '+ codeLength)
+        console.log(this.toFormattedHex(currentInstructionAddress,4) +'  '
+            + 'INS Code:' + code + ' '
+            + 'REG_A: '+ this.toFormattedHex(this.REG_A,2)+ '  '
+            + 'REG_X: '+ this.toFormattedHex(this.REG_X,2)+ '  '
+            + 'REG_Y: '+ this.toFormattedHex(this.REG_Y,2)+ '  '
+            + 'P: '+ this.toFormattedHex(ProcessorStatus,2)+ '  '
+            + 'Stack Pointer: '+ this.toFormattedHex(this.SP,2)+ '  '
         )
+        let data = new Uint8Array(Buffer.from(
+            this.toFormattedHex(currentInstructionAddress,4) +'  '
+            + this.toFormatString(code,9)
+            + 'A:'+ this.toFormattedHex(this.REG_A,2)+ ' '
+            + 'X:'+ this.toFormattedHex(this.REG_X,2)+ ' '
+            + 'Y:'+ this.toFormattedHex(this.REG_Y,2)+ ' '
+            + 'P:'+ this.toFormattedHex(ProcessorStatus,2)+ ' '
+            + 'SP:'+ this.toFormattedHex(this.SP,2)+ ' '+'\r\n'
+        ))
+        // fs.open('nestest-my.log', 'w', (err) => {
+        //     if (err) {
+        //         return console.error(err);
+        //     }    
+        // })
+        fs.appendFile("nestest-my.log", data, (err)  => {
+            if (err) {
+                return console.log('追加文件失败')
+            }
+        })
         // console.log('REG_A: '+this.REG_A)
         // console.log('REG_X: '+this.REG_X)
         // console.log('REG_Y: '+this.REG_Y)
         // console.log('PS_OVERFLOW: '+this.PS_OVERFLOW)
     }
+
+    // 反汇编，通过指令码输出汇编语句
+    toDisassembly(instructionCode,currentInstructionAddress){
+        let assemblyCode = ''
+        return assemblyCode
+    }
     
     toFormattedHex(num,length){
-        var len = num.toString(16).length;
+        var len = num.toString(16).length
         var outStr = num.toString(16).toUpperCase()
         while(len < length) {
             outStr = '0' + outStr
-            len++;
+            len++
         }
         return outStr
+    }
+
+    toFormatString(str,length){
+        let oldLength = str.length
+        for(let i=0;i<length - oldLength;i++){
+            str += ' '
+        }
+        return str
     }
 }
