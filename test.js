@@ -21,12 +21,13 @@ window.onload = function(){
     // ctx.fillRect(0,0,200,200)
     loadNesFile()
 	initCanvas()
-	window.requestAnimationFrame(onAnimationFrame);
+
+
 }
 
 function loadNesFile(){
     var req = new XMLHttpRequest();
-	req.open("GET", './roms/nestest.nes');
+	req.open("GET", './roms/kong.nes');
 	req.overrideMimeType("text/plain; charset=x-user-defined");
 	// req.onerror = () => console.log(`Error loading ${path}: ${req.statusText}`);
 	
@@ -44,12 +45,19 @@ function loadNesFile(){
 }
 
 function reset(nesData){
-	// var data = new Uint8Array(new ArrayBuffer(nesData.length))
-	// for (var i = 0, il = nesData.length; i < il; i++) {
-	// 	var value = nesData.charCodeAt(i)
-	// 	data[i] = value > 0xFF ? 0x20 : value
+	// 将网页加载的nesData进行转化为buffer流，否则后台的rom无法识别并getRomData
+	var data = new Uint8Array(new ArrayBuffer(nesData.length))
+	for (var i = 0, il = nesData.length; i < il; i++) {
+		var value = nesData.charCodeAt(i)
+		data[i] = value
+	}
+    jsfc.reset(data,framebuffer_u32)
+	window.requestAnimationFrame(onAnimationFrame);
+	// for(let i=0;i<15;i++){
+	// 	jsfc.onFrame()
+	// 	image.data.set(framebuffer_u8)
+	// 	canvas_ctx.putImageData(image, 0, 0)
 	// }
-    jsfc.reset(nesData,framebuffer_u32)
 }
 
 function initCanvas(){

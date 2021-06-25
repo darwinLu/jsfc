@@ -7,7 +7,7 @@ export class FC{
     constructor(romPath){
         this.romPath = romPath
         this.cpu = new CPU()
-        this.ppu = new PPU()
+        this.ppu = PPU.getInstance()
         this.rom = new Rom()
         this.vBuffer = new Array(256 * 240);
     }
@@ -33,24 +33,26 @@ export class FC{
     onFrame(){
         // 每帧应运行的时钟周期为 1789772.5（每秒总周期）/ 60 = 29829
         // 先实现帧同步，后续再考虑高精度的同步
-        var frameCycle = 29829
-        var cycle = 0
+        var cyclePerFrame = 29829
+        var cycleCount = 0
+        let currentInstructionCycle = 0
         for(;;){
             // 先运行CPU一段时间，即运行29829次CPU
-            this.cpu.execute()
+            // 如果是中高精度同步，此过程内PPU应该逐行输出到显示缓冲区
+            currentInstructionCycle += this.cpu.execute()
             if(this.cpu.emulateEnd == 1){
                 break
             }
-            cycle++
+            cycleCount++
             // ppu的速度应该是cpu的3倍，真正硬件是一个周期写一个像素点的所有数据
             // 还需要完善
-            if(cycle > frameCycle){
+            if(currentInstructionCycle > cyclePerFrame){
                 break
             }
             // this.ppu.execute()
             // let tempTime = new Date().getTime()
             // let cps = 1000 /(tempTime - startTime)
-            // // console.log(cps)
+            // // // console.log(cps)
             // while(cps > 1782579){
             //     this.sleep(1)
             //     tempTime = new Date().getTime()
@@ -70,8 +72,9 @@ export class FC{
             // }
         }
         // 再运行PPU，应输出一帧的全部像素，然后执行V-BLANK
-        // this.ppu.execute(this.vBuffer,this.cpu)
-        console.log('end emulate')
+        this.ppu.execute(this.vBuffer,this.cpu)
+        // this.cpu.INTERRUPT_NMI = 1
+        // console.log('end emulate')
     }
 
     toFormattedHex(num,length){
