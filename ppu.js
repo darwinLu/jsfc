@@ -140,42 +140,46 @@ export class PPU{
             for(let i=0x2000;i<0x23C0;i++){
                 // 获取到一个tile
                 let tile = this.vmemory.load(i)
-                let tileLine = (i - 0x2000) / 32
-                let tileRow = (i - 0x2000) % 32
-                // 在patternTable中找到这个tile的连续
-                // 如果tile的16进制数为TT，则它在patternTable中的位置是0x0TT0到0x0TTF，总共16字节，2个平面
-                // 或者是0x1TT0到0x1TTF，总共16字节，2个平面，这取决于PPU寄存器中的状态
-                // 先默认取0x0TT0的位置，尝试输出
-                let temp = tile << 4 & 0x1FF0
-                for(let j=0;j<8;j++){
-                    let frontByte = this.vmemory.load(j + temp)
-                    let backByte = this.vmemory.load(j + temp + 8)
-                    for(let k=0;k<8;k++){
-                        let frontBit = frontByte >> (7 - k) & 1
-                        let backBit = backByte >> (7 - k) & 1
-                        let resultIndex = frontBit + backBit
-                        let selectColor
-                        switch (resultIndex){
-                            case 0:
-                                selectColor = 0x000000
-                                break
-                            case 1:
-                                selectColor = 0xFF0000
-                                break
-                            case 2:
-                                selectColor = 0x00FF00
-                                break
-                            case 3:
-                                selectColor = 0x0000FF
-                                break
-                        }
+                let myTile = new Tile(tile)
+                myTile.getPatternAddress()
+                myTile.fillPixelColorMartix()
+                myTile.showPixelColorMartix()
+                // let tileLine = (i - 0x2000) / 32
+                // let tileRow = (i - 0x2000) % 32
+                // // 在patternTable中找到这个tile的连续
+                // // 如果tile的16进制数为TT，则它在patternTable中的位置是0x0TT0到0x0TTF，总共16字节，2个平面
+                // // 或者是0x1TT0到0x1TTF，总共16字节，2个平面，这取决于PPU寄存器中的状态
+                // // 先默认取0x0TT0的位置，尝试输出
+                // let temp = tile << 4 & 0x1FF0
+                // for(let j=0;j<8;j++){
+                //     let frontByte = this.vmemory.load(j + temp)
+                //     let backByte = this.vmemory.load(j + temp + 8)
+                //     for(let k=0;k<8;k++){
+                //         let frontBit = frontByte >> (7 - k) & 1
+                //         let backBit = backByte >> (7 - k) & 1
+                //         let resultIndex = frontBit + backBit
+                //         let selectColor
+                //         switch (resultIndex){
+                //             case 0:
+                //                 selectColor = 0x000000
+                //                 break
+                //             case 1:
+                //                 selectColor = 0xFF0000
+                //                 break
+                //             case 2:
+                //                 selectColor = 0x00FF00
+                //                 break
+                //             case 3:
+                //                 selectColor = 0x0000FF
+                //                 break
+                //         }
 
-                        // console.log('index :'+ (i - 0x2000) * 64 + j*8 + k)
-                        // console.log(0xFF000000 | selectColor)
-                        buffer[tileLine * 256 * 8 + j * 256 + tileRow * 8 +  k] = 0xFF000000 | selectColor
-                        // buffer[parseInt(i - 0x2000) * 64 + j*8 + k] = 0xFF000000 | this.toFormattedHex(parseInt(Math.random()*256*256*256).toString(16),6)
-                    }
-                }
+                //         // console.log('index :'+ (i - 0x2000) * 64 + j*8 + k)
+                //         // console.log(0xFF000000 | selectColor)
+                //         buffer[tileLine * 256 * 8 + j * 256 + tileRow * 8 +  k] = 0xFF000000 | selectColor
+                //         // buffer[parseInt(i - 0x2000) * 64 + j*8 + k] = 0xFF000000 | this.toFormattedHex(parseInt(Math.random()*256*256*256).toString(16),6)
+                //     }
+                // }
             }
             cpu.INTERRUPT_NMI = 1
         }
@@ -284,4 +288,39 @@ export class PPU{
          0x88EDF8, 0x83FFDD, 0xB8F8B8, 0xF5F8AC, 0xFFFFB0, 0xF8D8F8, 0x000000, 0x000000]
     }
 
+}
+
+class Tile{
+    constructor(patternCode){
+        this.vmemory = PPUMemory.getInstance()
+        this.patternCode = patternCode
+        this.pixelColorMartix = new Array(8)
+        for(let i=0;i<this.pixelColorMartix.length;i++){
+            this.pixelColorMartix[i] = new Array('0','0','0','0','0','0','0','0')
+        }
+    }
+    getPatternAddress(){
+        this.first8ByteStartAddress = this.patternCode << 4 & 0x0FF0
+        this.second8ByteStartAddress = this.first8ByteStartAddress + 8
+        // console.log('first 8Byte:'+first8ByteStartAddress.toString(16)+';second 8Byte:'+second8ByteStartAddress.toString(16))
+    }
+    fillPixelColorMartix(){
+        let line1Byte = this.vmemory.load(this.first8ByteStartAddress)
+        for(let i=0;i<8;i++){
+            this.pixelColorMartix[1][i] = line1Byte >> (7 - i) & 1
+        }
+    }
+    showPixelColorMartix(){
+        for(let i=0;i<8;i++){
+            let tempLine = ''
+            for(let j=0;j<8;j++){
+                tempLine += this.pixelColorMartix[i][j] + ' '
+            }
+            console.log(tempLine)
+        }
+    }
+    showName(){
+        console.log(this.patternCode.toString(16).toUpperCase())
+    }
+    
 }
